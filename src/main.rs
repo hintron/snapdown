@@ -1,10 +1,10 @@
-// use std::fs::{self, File};
-use std::fs::{self};
+use std::fs::{self, File};
+use std::io::copy;
 use std::path::Path;
 
 use anyhow::Result;
 use csv::Reader;
-// use ureq;
+use ureq;
 
 fn print_usage(program_name: &str) {
     eprintln!("Usage: {} <input_csv> <output_dir>", program_name);
@@ -55,41 +55,41 @@ fn main() -> Result<()> {
     println!("Output directory: {}", args.output_dir);
 
     println!("Creating output directory if it doesn't exist...");
-    fs::create_dir_all(args.output_dir)?;
+    fs::create_dir_all(&args.output_dir)?;
     println!("Reading CSV file...");
-    let mut rdr = Reader::from_path(args.input_csv)?;
+    let mut rdr = Reader::from_path(&args.input_csv)?;
 
     // Each row is of the form (timestamp_utc, format, latitude, longitude, download_url)
     for result in rdr.records() {
         let row = result?;
-        println!("{:?}", row);
-        let timestamp_str = row[0].replace(' ', "_");
-        // let dt: DateTime<Utc> =
-        //     DateTime::parse_from_str(&row[0], "%Y-%m-%d %H:%M:%S UTC")?
-        //         .with_timezone(&Utc);
+        // println!("{:?}", row);
+        let timestamp_str = row[0].replace(' ', "_").replace(':', "-");
+        let format = &row[1];
+        let latitude = &row[2].replace('.', "");
+        let longitude = &row[3];
+        let download_url = &row[4];
 
-        let ext = match &row[1] {
+        let ext = match format {
             "Image" => "jpg",
             // "Image" => "png",
             "Video" => "mp4",
             _ => "bin",
         };
 
-        let filename = format!("{}_{}_{}.{}", timestamp_str, &row[2], &row[3], ext);
-
-        let path = Path::new("out").join(filename);
+        let filename = format!("{}_{}_{}.{}", timestamp_str, latitude, longitude, ext);
+        let path = Path::new(&args.output_dir).join(filename);
 
         if path.exists() {
             println!("File already exists; skipping download: {:?}", path);
             continue;
         }
 
-        // let resp = ureq::get(&row.download_url).call()?;
-        // let mut file = File::create(&path)?;
-        // copy(&mut resp.into_reader(), &mut file)?;
-
-        // set_file_timestamp(&path, dt)?;
-        // set_exif_metadata(&path, dt)?;
+        println!("Creating file at path: {:?}", path);
+        let mut file = File::create(&path)?;
+        println!("Downloading from URL: {}", download_url);
+        let mut resp = ureq::get(download_url).call()?;
+        println!("Writing to file: {:?}", file);
+        copy(&mut resp.body_mut().as_reader(), &mut file)?;
 
         // println!("Saved {:?}", path);
     }
