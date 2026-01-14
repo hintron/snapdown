@@ -104,6 +104,7 @@ fn main() -> Result<()> {
     // Collect all records first
     let records: Vec<_> = rdr.records().collect::<Result<_, _>>()?;
 
+    println!("Downloading {} files:", records.len());
     // Each row is of the form (timestamp_utc, format, latitude, longitude, download_url)
     records.par_iter().for_each(|row| {
         let timestamp_str = row[0].replace(' ', "_").replace(':', "-");
@@ -123,32 +124,34 @@ fn main() -> Result<()> {
         let path = Path::new(&args.output_dir).join(filename);
 
         if path.exists() {
-            println!("File already exists; skipping download: {:?}", path);
+            println!("  * File already exists; skipping download: {:?}", path);
             return;
         }
 
-        println!("Creating file at path: {:?}", path);
+        // println!("Creating file at path: {:?}", path);
         let mut file = match File::create(&path) {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("Error creating file {:?}: {}", path, e);
+                eprintln!("  * Error creating file {:?}: {}", path, e);
                 return;
             }
         };
-        println!("Downloading from URL: {}", download_url);
+
         let mut resp = match ureq::get(download_url).call() {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("Error downloading from {}: {}", download_url, e);
+                eprintln!("  * Error downloading from {}: {}", download_url, e);
                 return;
             }
         };
-        println!("Writing to file: {:?}", file);
+        // println!("Writing to file: {:?}", file);
         if let Err(e) = copy(&mut resp.body_mut().as_reader(), &mut file) {
-            eprintln!("Error writing to file {:?}: {}", path, e);
+            eprintln!(
+                "  * Downloaded, but error writing to file {:?}: {}",
+                path, e
+            );
         }
-
-        // println!("Saved {:?}", path);
+        println!("  * Downloaded {}", download_url);
     });
 
     Ok(())
