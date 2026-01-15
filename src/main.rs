@@ -128,7 +128,6 @@ fn main() -> Result<()> {
             return;
         }
 
-        // println!("Creating file at path: {:?}", path);
         let mut file = match File::create(&path) {
             Ok(f) => f,
             Err(e) => {
@@ -144,7 +143,7 @@ fn main() -> Result<()> {
                 return;
             }
         };
-        // println!("Writing to file: {:?}", file);
+
         if let Err(e) = copy(&mut resp.body_mut().as_reader(), &mut file) {
             eprintln!(
                 "  * Downloaded, but error writing to file {:?}: {}",
