@@ -36,8 +36,8 @@ Windows, MacOS, and Linux).
    * In Chrome, right click the webpage you just opened and click `Inspect`. Or,
      do Ctrl-Shift-C.
 
-5. Open [`extract_download_links.js`](javascript/extract_download_links.js),
-   click "Raw", and copy all the code to your clipboard.
+5. Open [`extract_download_links.js`](https://raw.githubusercontent.com/hintron/snapdown/refs/heads/main/javascript/extract_download_links.js),
+   and copy all the code to your clipboard.
 
    * You can do this quickly with Ctrl-a, then Ctrl-c.
 
