@@ -424,24 +424,26 @@ fn run_downloader(
             return;
         }
 
-        let mut file = match File::create(&path) {
-            Ok(f) => f,
-            Err(e) => {
-                log_error(
-                    &gui_console,
-                    format!("  * Error creating file {:?}: {}", path, e),
-                );
-                error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                return;
-            }
-        };
-
         let mut resp = match ureq::get(download_url).call() {
             Ok(r) => r,
             Err(e) => {
                 log_error(
                     &gui_console,
                     format!("  * Error downloading from {}: {}", download_url, e),
+                );
+                error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return;
+            }
+        };
+
+        // Create the file AFTER the download, so we don't have a ton of open
+        // files and exhaust Linux's default per-process open file limit.
+        let mut file = match File::create(&path) {
+            Ok(f) => f,
+            Err(e) => {
+                log_error(
+                    &gui_console,
+                    format!("  * Error creating file {:?}: {}", path, e),
                 );
                 error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return;
