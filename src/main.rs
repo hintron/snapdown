@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::mpsc;
 
 use anyhow::Result;
+use circular_buffer::CircularBuffer;
 use csv::Reader;
 use eframe::egui;
 use rayon::prelude::*;
@@ -38,7 +39,8 @@ struct SnapdownEframeApp {
     success_count: usize,
     error_count: usize,
     skip_count: usize,
-    messages_console: Vec<String>,
+    // This will act as a circular buffer to limit memory usage
+    messages_console: CircularBuffer<1024, String>,
 }
 
 impl eframe::App for SnapdownEframeApp {
@@ -148,13 +150,13 @@ impl eframe::App for SnapdownEframeApp {
                     ui.label(format!("Skipped: {}", self.skip_count));
                 }
             }
-            ui.heading("Console Log");
+            ui.heading("Console Log (last 1024 messages)");
             ui.separator();
             ////////////////////////////////////////////////////////////////////
             // Console Log Section
             ////////////////////////////////////////////////////////////////////
             self.recv_logs_from_downloader.try_iter().for_each(|msg| {
-                self.messages_console.push(msg);
+                self.messages_console.push_back(msg);
             });
 
             // Capture remaining space
@@ -320,7 +322,7 @@ fn run_gui() -> Result<()> {
         success_count: 0,
         error_count: 0,
         skip_count: 0,
-        messages_console: Vec::new(),
+        messages_console: CircularBuffer::<1024, String>::new(),
     };
 
     // Have the GUI take care of getting args from the user
