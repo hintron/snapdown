@@ -63,6 +63,20 @@ impl eframe::App for SnapdownEframeApp {
                     }
                 });
             }
+
+            match &self.picked_path {
+                Some(picked_path) => {
+                    ui.label(format!("Using picked file: {}", picked_path));
+                    if ui.button("Run SnapDown").clicked()
+                    {
+                        match run_downloader(picked_path, "snapdown_output", DEFAULT_NUM_JOBS) {
+                            Ok(_) => println!("SnapDown completed successfully."),
+                            Err(e) => eprintln!("Error running SnapDown: {}", e),
+                        };
+                    }
+                },
+                None => {}
+            }
         });
 
         preview_files_being_dropped(ctx);
@@ -234,13 +248,13 @@ fn main() -> Result<()> {
     println!("Parallel jobs: {}", args.jobs);
 
     if args.cli {
-        return run_downloader(&args);
+        return run_downloader(&args.input_csv, &args.output_dir, args.jobs);
     } else {
-        return run_gui(&args);
+        return run_gui();
     }
 }
 
-fn run_gui(_args: &Args) -> Result<()> {
+fn run_gui() -> Result<()> {
     // Have the GUI take care of getting args from the user
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -256,17 +270,17 @@ fn run_gui(_args: &Args) -> Result<()> {
     .map_err(|e| anyhow::anyhow!("Failed to run GUI: {}", e))
 }
 
-fn run_downloader(args: &Args) -> Result<()> {
+fn run_downloader(input_csv: &str, output_dir: &str, jobs: usize) -> Result<()> {
     // Configure Rayon thread pool
     rayon::ThreadPoolBuilder::new()
-        .num_threads(args.jobs)
+        .num_threads(jobs)
         .build_global()
         .unwrap();
 
     println!("Creating output directory if it doesn't exist...");
-    fs::create_dir_all(&args.output_dir)?;
+    fs::create_dir_all(output_dir)?;
     println!("Reading CSV file...");
-    let mut rdr = Reader::from_path(&args.input_csv)?;
+    let mut rdr = Reader::from_path(input_csv)?;
 
     // Collect all records first
     let records: Vec<_> = rdr.records().collect::<Result<_, _>>()?;
@@ -284,11 +298,13 @@ fn run_downloader(args: &Args) -> Result<()> {
             "Image" => "jpg",
             // "Image" => "png",
             "Video" => "mp4",
+            "PNG" => "png",
+            "SVG" => "svg",
             _ => "bin",
         };
 
         let filename = format!("{}_{}_{}.{}", timestamp_str, latitude, longitude, ext);
-        let path = Path::new(&args.output_dir).join(filename);
+        let path = Path::new(output_dir).join(filename);
 
         if path.exists() {
             println!("  * File already exists; skipping download: {:?}", path);
