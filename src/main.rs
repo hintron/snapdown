@@ -344,6 +344,10 @@ fn run_downloader(
         &gui_console,
         format!("Downloading {} files:", records.len()),
     );
+
+    let success_count = std::sync::atomic::AtomicUsize::new(0);
+    let error_count = std::sync::atomic::AtomicUsize::new(0);
+    let skip_count = std::sync::atomic::AtomicUsize::new(0);
     // Each row is of the form (timestamp_utc, format, latitude, longitude, download_url)
     records.par_iter().for_each(|row| {
         let timestamp_str = row[0].replace(' ', "_").replace(':', "-");
@@ -369,6 +373,7 @@ fn run_downloader(
                 &gui_console,
                 format!("  * File already exists; skipping download: {:?}", path),
             );
+            skip_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return;
         }
 
@@ -379,6 +384,7 @@ fn run_downloader(
                     &gui_console,
                     format!("  * Error creating file {:?}: {}", path, e),
                 );
+                error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return;
             }
         };
@@ -390,12 +396,16 @@ fn run_downloader(
                     &gui_console,
                     format!("  * Error downloading from {}: {}", download_url, e),
                 );
+                error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return;
             }
         };
 
         match copy(&mut resp.body_mut().as_reader(), &mut file) {
-            Ok(_) => println!("  * Downloaded {}", download_url),
+            Ok(_) => {
+                log_message(&gui_console, format!("  * Downloaded {}", download_url));
+                success_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             Err(e) => {
                 log_error(
                     &gui_console,
@@ -404,9 +414,32 @@ fn run_downloader(
                         path, e
                     ),
                 );
+                error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         }
     });
+
+    let success_count = success_count.load(std::sync::atomic::Ordering::Relaxed);
+    let error_count = error_count.load(std::sync::atomic::Ordering::Relaxed);
+    let skip_count = skip_count.load(std::sync::atomic::Ordering::Relaxed);
+
+    log_message(
+        &gui_console,
+        format!("Finished processing {} links", records.len()),
+    );
+    if success_count > 0 {
+        log_message(
+            &gui_console,
+            format!("  - Success: {} files", records.len()),
+        );
+    }
+    if error_count > 0 {
+        log_error(&gui_console, format!("  - Error: {} files", error_count));
+    }
+    if skip_count > 0 {
+        log_message(&gui_console, format!("  - Skipped: {} files", skip_count));
+    }
+    log_message(&gui_console, format!("SnapDown completed"));
 
     Ok(())
 }
