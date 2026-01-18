@@ -32,7 +32,10 @@ struct SnapdownEframeApp {
 impl eframe::App for SnapdownEframeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.label("SnapDown: Download SnapChat files quickly!");
+            ////////////////////////////////////////////////////////////////////
+            // Header/Control Section
+            ////////////////////////////////////////////////////////////////////
+            ui.heading("SnapDown: Download SnapChat files quickly!");
 
             let _state_lable_resp = match self.state {
                 SnapdownState::Idle => ui.label("Select a .csv file to begin."),
@@ -106,13 +109,28 @@ impl eframe::App for SnapdownEframeApp {
                 None => {}
             }
 
+            ui.heading("Console Log");
+            ui.separator();
+            ////////////////////////////////////////////////////////////////////
+            // Console Log Section
+            ////////////////////////////////////////////////////////////////////
             self.recv_from_downloader.try_iter().for_each(|msg| {
                 self.messages_console.push(msg);
             });
 
-            for message in &self.messages_console {
-                ui.monospace(message);
-            }
+            // Capture remaining space
+            let available = ui.available_size();
+
+            // ----- scrollable content -----
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.set_min_size(available);
+
+                    for message in &self.messages_console {
+                        ui.monospace(message);
+                    }
+                });
         });
     }
 }
