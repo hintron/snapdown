@@ -24,8 +24,8 @@ struct SnapdownEframeApp {
     state: SnapdownState,
     recv_from_filepicker: mpsc::Receiver<String>,
     send_from_filepicker: mpsc::Sender<String>,
-    recv_from_downloader: mpsc::Receiver<String>,
-    send_from_downloader: mpsc::Sender<String>,
+    recv_logs_from_downloader: mpsc::Receiver<String>,
+    send_logs_from_downloader: mpsc::Sender<String>,
     messages_console: Vec<String>,
 }
 
@@ -86,13 +86,13 @@ impl eframe::App for SnapdownEframeApp {
 
                     if ui.button("Run SnapDown").clicked() {
                         let picked_path = picked_path.clone();
-                        let send_from_downloader_clone = self.send_from_downloader.clone();
+                        let send_logs_from_downloader_clone = self.send_logs_from_downloader.clone();
                         std::thread::spawn(move || {
                             match run_downloader(
                                 &picked_path,
                                 "snapdown_output",
                                 DEFAULT_NUM_JOBS,
-                                Some(send_from_downloader_clone),
+                                Some(send_logs_from_downloader_clone),
                             ) {
                                 Ok(_) => println!("SnapDown completed successfully."),
                                 Err(e) => eprintln!("Error running SnapDown: {}", e),
@@ -109,7 +109,7 @@ impl eframe::App for SnapdownEframeApp {
             ////////////////////////////////////////////////////////////////////
             // Console Log Section
             ////////////////////////////////////////////////////////////////////
-            self.recv_from_downloader.try_iter().for_each(|msg| {
+            self.recv_logs_from_downloader.try_iter().for_each(|msg| {
                 self.messages_console.push(msg);
             });
 
@@ -261,14 +261,14 @@ fn main() -> Result<()> {
 
 fn run_gui() -> Result<()> {
     let (send_from_filepicker, recv_from_filepicker) = mpsc::channel::<String>();
-    let (send_from_downloader, recv_from_downloader) = mpsc::channel::<String>();
+    let (send_logs_from_downloader, recv_logs_from_downloader) = mpsc::channel::<String>();
     let snapdown_app = SnapdownEframeApp {
         picked_path: None,
         state: SnapdownState::Idle,
         send_from_filepicker: send_from_filepicker,
         recv_from_filepicker: recv_from_filepicker,
-        send_from_downloader: send_from_downloader,
-        recv_from_downloader: recv_from_downloader,
+        send_logs_from_downloader: send_logs_from_downloader,
+        recv_logs_from_downloader: recv_logs_from_downloader,
         messages_console: Vec::new(),
     };
 
