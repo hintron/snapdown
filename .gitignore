@@ -1,5 +1,7 @@
 /target
 snapdown_output/
+temp/
+tmp/
 *.log
 *.txt
 *.jpg
