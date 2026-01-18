@@ -11,11 +11,18 @@ use eframe::egui;
 use rayon::prelude::*;
 use ureq;
 
+struct SnapdownStatus {
+    finished: bool,
+    error_count: usize,
+    success_count: usize,
+    skip_count: usize,
+}
+
 enum SnapdownState {
     Idle,
     SelectingFile,
     Downloading,
-    // Completed,
+    Completed,
     // Error,
 }
 
@@ -26,6 +33,11 @@ struct SnapdownEframeApp {
     send_from_filepicker: mpsc::Sender<String>,
     recv_logs_from_downloader: mpsc::Receiver<String>,
     send_logs_from_downloader: mpsc::Sender<String>,
+    recv_status_from_downloader: mpsc::Receiver<SnapdownStatus>,
+    send_status_from_downloader: mpsc::Sender<SnapdownStatus>,
+    success_count: usize,
+    error_count: usize,
+    skip_count: usize,
     messages_console: Vec<String>,
 }
 
@@ -36,14 +48,6 @@ impl eframe::App for SnapdownEframeApp {
             // Header/Control Section
             ////////////////////////////////////////////////////////////////////
             ui.heading("SnapDown: Download SnapChat files quickly!");
-
-            let _state_lable_resp = match self.state {
-                SnapdownState::Idle => ui.label("Select a .csv file to begin."),
-                SnapdownState::SelectingFile => ui.label("Selecting file..."),
-                SnapdownState::Downloading => ui.label("Downloading files..."),
-                // SnapdownState::Completed => ui.label("Download completed!"),
-                // SnapdownState::Error => ui.label("An error occurred during download."),
-            };
 
             if ui.button("Open .csv file...").clicked() {
                 // Open file dialog in separate thread to avoid blocking UI
@@ -86,13 +90,17 @@ impl eframe::App for SnapdownEframeApp {
 
                     if ui.button("Run SnapDown").clicked() {
                         let picked_path = picked_path.clone();
-                        let send_logs_from_downloader_clone = self.send_logs_from_downloader.clone();
+                        let send_logs_from_downloader_clone =
+                            self.send_logs_from_downloader.clone();
+                        let send_status_from_downloader_clone =
+                            self.send_status_from_downloader.clone();
                         std::thread::spawn(move || {
                             match run_downloader(
                                 &picked_path,
                                 "snapdown_output",
                                 DEFAULT_NUM_JOBS,
                                 Some(send_logs_from_downloader_clone),
+                                Some(send_status_from_downloader_clone),
                             ) {
                                 Ok(_) => println!("SnapDown completed successfully."),
                                 Err(e) => eprintln!("Error running SnapDown: {}", e),
@@ -104,6 +112,42 @@ impl eframe::App for SnapdownEframeApp {
                 None => {}
             }
 
+            self.recv_status_from_downloader
+                .try_iter()
+                .for_each(|status| {
+                    if status.finished {
+                        self.state = SnapdownState::Completed;
+                    } else {
+                        self.state = SnapdownState::Downloading;
+                    }
+                    self.success_count = status.success_count;
+                    self.error_count = status.error_count;
+                    self.skip_count = status.skip_count;
+                });
+
+            ui.separator();
+            ui.heading("Status");
+            ui.separator();
+            match self.state {
+                SnapdownState::Idle => {
+                    ui.label("Idle. Ready to start downloading.");
+                }
+                SnapdownState::SelectingFile => {
+                    ui.label("Selecting file...");
+                }
+                SnapdownState::Downloading => {
+                    ui.label("Downloading files...");
+                    ui.label(format!("Successful downloads: {}", self.success_count));
+                    ui.label(format!("Errors: {}", self.error_count));
+                    ui.label(format!("Skipped: {}", self.skip_count));
+                }
+                SnapdownState::Completed => {
+                    ui.label("Download completed!");
+                    ui.label(format!("Successful downloads: {}", self.success_count));
+                    ui.label(format!("Errors: {}", self.error_count));
+                    ui.label(format!("Skipped: {}", self.skip_count));
+                }
+            }
             ui.heading("Console Log");
             ui.separator();
             ////////////////////////////////////////////////////////////////////
@@ -253,7 +297,7 @@ fn main() -> Result<()> {
     println!("Parallel jobs: {}", args.jobs);
 
     if args.cli {
-        return run_downloader(&args.input_csv, &args.output_dir, args.jobs, None);
+        return run_downloader(&args.input_csv, &args.output_dir, args.jobs, None, None);
     } else {
         return run_gui();
     }
@@ -262,6 +306,8 @@ fn main() -> Result<()> {
 fn run_gui() -> Result<()> {
     let (send_from_filepicker, recv_from_filepicker) = mpsc::channel::<String>();
     let (send_logs_from_downloader, recv_logs_from_downloader) = mpsc::channel::<String>();
+    let (send_status_from_downloader, recv_status_from_downloader) =
+        mpsc::channel::<SnapdownStatus>();
     let snapdown_app = SnapdownEframeApp {
         picked_path: None,
         state: SnapdownState::Idle,
@@ -269,6 +315,11 @@ fn run_gui() -> Result<()> {
         recv_from_filepicker: recv_from_filepicker,
         send_logs_from_downloader: send_logs_from_downloader,
         recv_logs_from_downloader: recv_logs_from_downloader,
+        send_status_from_downloader: send_status_from_downloader,
+        recv_status_from_downloader: recv_status_from_downloader,
+        success_count: 0,
+        error_count: 0,
+        skip_count: 0,
         messages_console: Vec::new(),
     };
 
@@ -316,6 +367,7 @@ fn run_downloader(
     output_dir: &str,
     jobs: usize,
     gui_console: Option<mpsc::Sender<String>>,
+    status_sender: Option<mpsc::Sender<SnapdownStatus>>,
 ) -> Result<()> {
     // Configure Rayon thread pool
     rayon::ThreadPoolBuilder::new()
@@ -412,11 +464,45 @@ fn run_downloader(
                 error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         }
+
+        // Every 10 items send a status update
+        match &status_sender {
+            Some(sender) => {
+                let total_success = success_count.load(std::sync::atomic::Ordering::Relaxed);
+                let total_error = error_count.load(std::sync::atomic::Ordering::Relaxed);
+                let total_skip = skip_count.load(std::sync::atomic::Ordering::Relaxed);
+                let status = SnapdownStatus {
+                    finished: false,
+                    success_count: total_success,
+                    error_count: total_error,
+                    skip_count: total_skip,
+                };
+                sender.send(status).unwrap_or_else(|e| {
+                    eprintln!("Error sending status to GUI: {}", e);
+                });
+            }
+            None => {}
+        }
     });
 
     let success_count = success_count.load(std::sync::atomic::Ordering::Relaxed);
     let error_count = error_count.load(std::sync::atomic::Ordering::Relaxed);
     let skip_count = skip_count.load(std::sync::atomic::Ordering::Relaxed);
+
+    match &status_sender {
+        Some(sender) => {
+            let status = SnapdownStatus {
+                finished: true,
+                success_count: success_count,
+                error_count: error_count,
+                skip_count: skip_count,
+            };
+            sender.send(status).unwrap_or_else(|e| {
+                eprintln!("Error sending status to GUI: {}", e);
+            });
+        }
+        None => {}
+    }
 
     log_message(
         &gui_console,
