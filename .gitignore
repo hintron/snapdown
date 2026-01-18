@@ -1,4 +1,5 @@
 /target
+snapdown_output/
 *.log
 *.txt
 *.jpg
