@@ -3,6 +3,7 @@
 use std::fs::{self, File};
 use std::io::copy;
 use std::path::Path;
+use std::sync::mpsc;
 
 use anyhow::Result;
 use csv::Reader;
@@ -10,9 +11,19 @@ use eframe::egui;
 use rayon::prelude::*;
 use ureq;
 
-#[derive(Default)]
+enum SnapdownState {
+    Idle,
+    SelectingFile,
+    // Downloading,
+    // Completed,
+    // Error,
+}
+
 struct SnapdownEframeApp {
     picked_path: Option<String>,
+    state: SnapdownState,
+    recv_from_filepicker: mpsc::Receiver<String>,
+    send_from_filepicker: mpsc::Sender<String>,
 }
 
 impl eframe::App for SnapdownEframeApp {
@@ -20,15 +31,45 @@ impl eframe::App for SnapdownEframeApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.label("SnapDown: Download SnapChat files quickly!");
 
+            let _state_lable_resp = match self.state {
+                SnapdownState::Idle => ui.label("Select a .csv file to begin."),
+                SnapdownState::SelectingFile => ui.label("Selecting file..."),
+                // SnapdownState::Downloading => ui.label("Downloading files..."),
+                // SnapdownState::Completed => ui.label("Download completed!"),
+                // SnapdownState::Error => ui.label("An error occurred during download."),
+            };
+
             if ui.button("Open .csv file...").clicked() {
-                // Open file dialog
-                match rfd::FileDialog::new().pick_file() {
-                    Some(path) => {
-                        self.picked_path = Some(path.display().to_string());
+                // Open file dialog in separate thread to avoid blocking UI
+                // Clone the sender for use in the thread
+                let send_from_filepicker_clone = self.send_from_filepicker.clone();
+                std::thread::spawn(move || {
+                    match rfd::FileDialog::new().pick_file() {
+                        Some(path) => {
+                            // Once file is picked, send it back to the UI thread
+                            match send_from_filepicker_clone.send(path.display().to_string()) {
+                                Err(e) => {
+                                    eprintln!("Error sending picked file path to UI thread: {}", e);
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
-                }
+                });
+                self.state = SnapdownState::SelectingFile;
             }
+
+            self.recv_from_filepicker
+                .try_iter()
+                .for_each(|picked_path| {
+                    println!(
+                        "Picked file and received it from picker thread: {}",
+                        picked_path
+                    );
+                    self.picked_path = Some(picked_path);
+                    self.state = SnapdownState::Idle;
+                });
 
             match &self.picked_path {
                 Some(picked_path) => {
@@ -185,6 +226,14 @@ fn main() -> Result<()> {
 }
 
 fn run_gui() -> Result<()> {
+    let (send_from_filepicker, recv_from_filepicker) = mpsc::channel::<String>();
+    let snapdown_app = SnapdownEframeApp {
+        picked_path: None,
+        state: SnapdownState::Idle,
+        send_from_filepicker: send_from_filepicker,
+        recv_from_filepicker: recv_from_filepicker,
+    };
+
     // Have the GUI take care of getting args from the user
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([640.0, 240.0]),
@@ -193,7 +242,7 @@ fn run_gui() -> Result<()> {
     eframe::run_native(
         "SnapDown GUI",
         options,
-        Box::new(|_cc| Ok(Box::<SnapdownEframeApp>::default())),
+        Box::new(|_cc| Ok(Box::new(snapdown_app))),
     )
     .map_err(|e| anyhow::anyhow!("Failed to run GUI: {}", e))
 }
