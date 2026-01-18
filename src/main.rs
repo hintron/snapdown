@@ -20,17 +20,24 @@ impl eframe::App for SnapdownEframeApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.label("SnapDown: Download SnapChat files quickly!");
 
-            if ui.button("Open .csv file...").clicked()
-                && let Some(path) = rfd::FileDialog::new().pick_file()
-            {
-                self.picked_path = Some(path.display().to_string());
+            if ui.button("Open .csv file...").clicked() {
+                // Open file dialog
+                match rfd::FileDialog::new().pick_file() {
+                    Some(path) => {
+                        self.picked_path = Some(path.display().to_string());
+                    }
+                    _ => {}
+                }
             }
 
-            if let Some(picked_path) = &self.picked_path {
-                ui.horizontal(|ui| {
-                    ui.label("Picked file:");
-                    ui.monospace(picked_path);
-                });
+            match &self.picked_path {
+                Some(picked_path) => {
+                    ui.horizontal(|ui| {
+                        ui.label("Picked file:");
+                        ui.monospace(picked_path);
+                    });
+                }
+                None => {}
             }
 
             match &self.picked_path {
@@ -248,13 +255,15 @@ fn run_downloader(input_csv: &str, output_dir: &str, jobs: usize) -> Result<()> 
             }
         };
 
-        if let Err(e) = copy(&mut resp.body_mut().as_reader(), &mut file) {
-            eprintln!(
-                "  * Downloaded, but error writing to file {:?}: {}",
-                path, e
-            );
+        match copy(&mut resp.body_mut().as_reader(), &mut file) {
+            Ok(_) => println!("  * Downloaded {}", download_url),
+            Err(e) => {
+                eprintln!(
+                    "  * Downloaded, but error writing to file {:?}: {}",
+                    path, e
+                );
+            }
         }
-        println!("  * Downloaded {}", download_url);
     });
 
     Ok(())
