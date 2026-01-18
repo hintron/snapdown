@@ -12,16 +12,15 @@ use ureq;
 
 #[derive(Default)]
 struct SnapdownEframeApp {
-    dropped_files: Vec<egui::DroppedFile>,
     picked_path: Option<String>,
 }
 
 impl eframe::App for SnapdownEframeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.label("Drag-and-drop the .csv file onto the window! Or, click the button below to pick a file.");
+            ui.label("SnapDown: Download SnapChat files quickly!");
 
-            if ui.button("Open file…").clicked()
+            if ui.button("Open .csv file...").clicked()
                 && let Some(path) = rfd::FileDialog::new().pick_file()
             {
                 self.picked_path = Some(path.display().to_string());
@@ -34,94 +33,18 @@ impl eframe::App for SnapdownEframeApp {
                 });
             }
 
-            // Show dropped files (if any):
-            if !self.dropped_files.is_empty() {
-                ui.group(|ui| {
-                    ui.label("Dropped files:");
-
-                    for file in &self.dropped_files {
-                        let mut info = if let Some(path) = &file.path {
-                            path.display().to_string()
-                        } else if !file.name.is_empty() {
-                            file.name.clone()
-                        } else {
-                            "???".to_owned()
-                        };
-
-                        let mut additional_info = vec![];
-                        if !file.mime.is_empty() {
-                            additional_info.push(format!("type: {}", file.mime));
-                        }
-                        if let Some(bytes) = &file.bytes {
-                            additional_info.push(format!("{} bytes", bytes.len()));
-                        }
-                        if !additional_info.is_empty() {
-                            info += &format!(" ({})", additional_info.join(", "));
-                        }
-
-                        ui.label(info);
-                    }
-                });
-            }
-
             match &self.picked_path {
                 Some(picked_path) => {
-                    ui.label(format!("Using picked file: {}", picked_path));
-                    if ui.button("Run SnapDown").clicked()
-                    {
+                    if ui.button("Run SnapDown").clicked() {
                         match run_downloader(picked_path, "snapdown_output", DEFAULT_NUM_JOBS) {
                             Ok(_) => println!("SnapDown completed successfully."),
                             Err(e) => eprintln!("Error running SnapDown: {}", e),
                         };
                     }
-                },
+                }
                 None => {}
             }
         });
-
-        preview_files_being_dropped(ctx);
-
-        // Collect dropped files:
-        ctx.input(|i| {
-            if !i.raw.dropped_files.is_empty() {
-                self.dropped_files.clone_from(&i.raw.dropped_files);
-            }
-        });
-    }
-}
-
-/// Preview hovering files:
-fn preview_files_being_dropped(ctx: &egui::Context) {
-    use egui::{Align2, Color32, Id, LayerId, Order, TextStyle};
-    use std::fmt::Write as _;
-
-    if !ctx.input(|i| i.raw.hovered_files.is_empty()) {
-        let text = ctx.input(|i| {
-            let mut text = "Dropping files:\n".to_owned();
-            for file in &i.raw.hovered_files {
-                if let Some(path) = &file.path {
-                    write!(text, "\n{}", path.display()).ok();
-                } else if !file.mime.is_empty() {
-                    write!(text, "\n{}", file.mime).ok();
-                } else {
-                    text += "\n???";
-                }
-            }
-            text
-        });
-
-        let painter =
-            ctx.layer_painter(LayerId::new(Order::Foreground, Id::new("file_drop_target")));
-
-        let content_rect = ctx.content_rect();
-        painter.rect_filled(content_rect, 0.0, Color32::from_black_alpha(192));
-        painter.text(
-            content_rect.center(),
-            Align2::CENTER_CENTER,
-            text,
-            TextStyle::Heading.resolve(&ctx.style()),
-            Color32::WHITE,
-        );
     }
 }
 
@@ -257,9 +180,7 @@ fn main() -> Result<()> {
 fn run_gui() -> Result<()> {
     // Have the GUI take care of getting args from the user
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([640.0, 240.0]) // wide enough for the drag-drop overlay text
-            .with_drag_and_drop(true),
+        viewport: egui::ViewportBuilder::default().with_inner_size([640.0, 240.0]),
         ..Default::default()
     };
     eframe::run_native(
