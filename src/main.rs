@@ -14,7 +14,7 @@ use ureq;
 enum SnapdownState {
     Idle,
     SelectingFile,
-    // Downloading,
+    Downloading,
     // Completed,
     // Error,
 }
@@ -24,6 +24,9 @@ struct SnapdownEframeApp {
     state: SnapdownState,
     recv_from_filepicker: mpsc::Receiver<String>,
     send_from_filepicker: mpsc::Sender<String>,
+    recv_from_downloader: mpsc::Receiver<String>,
+    send_from_downloader: mpsc::Sender<String>,
+    messages_console: Vec<String>,
 }
 
 impl eframe::App for SnapdownEframeApp {
@@ -34,7 +37,7 @@ impl eframe::App for SnapdownEframeApp {
             let _state_lable_resp = match self.state {
                 SnapdownState::Idle => ui.label("Select a .csv file to begin."),
                 SnapdownState::SelectingFile => ui.label("Selecting file..."),
-                // SnapdownState::Downloading => ui.label("Downloading files..."),
+                SnapdownState::Downloading => ui.label("Downloading files..."),
                 // SnapdownState::Completed => ui.label("Download completed!"),
                 // SnapdownState::Error => ui.label("An error occurred during download."),
             };
@@ -84,13 +87,31 @@ impl eframe::App for SnapdownEframeApp {
             match &self.picked_path {
                 Some(picked_path) => {
                     if ui.button("Run SnapDown").clicked() {
-                        match run_downloader(picked_path, "snapdown_output", DEFAULT_NUM_JOBS) {
-                            Ok(_) => println!("SnapDown completed successfully."),
-                            Err(e) => eprintln!("Error running SnapDown: {}", e),
-                        };
+                        let picked_path = picked_path.clone();
+                        let send_from_downloader_clone = self.send_from_downloader.clone();
+                        std::thread::spawn(move || {
+                            match run_downloader(
+                                &picked_path,
+                                "snapdown_output",
+                                DEFAULT_NUM_JOBS,
+                                Some(send_from_downloader_clone),
+                            ) {
+                                Ok(_) => println!("SnapDown completed successfully."),
+                                Err(e) => eprintln!("Error running SnapDown: {}", e),
+                            }
+                        });
+                        self.state = SnapdownState::Downloading;
                     }
                 }
                 None => {}
+            }
+
+            self.recv_from_downloader.try_iter().for_each(|msg| {
+                self.messages_console.push(msg);
+            });
+
+            for message in &self.messages_console {
+                ui.monospace(message);
             }
         });
     }
@@ -219,7 +240,7 @@ fn main() -> Result<()> {
     println!("Parallel jobs: {}", args.jobs);
 
     if args.cli {
-        return run_downloader(&args.input_csv, &args.output_dir, args.jobs);
+        return run_downloader(&args.input_csv, &args.output_dir, args.jobs, None);
     } else {
         return run_gui();
     }
@@ -227,11 +248,15 @@ fn main() -> Result<()> {
 
 fn run_gui() -> Result<()> {
     let (send_from_filepicker, recv_from_filepicker) = mpsc::channel::<String>();
+    let (send_from_downloader, recv_from_downloader) = mpsc::channel::<String>();
     let snapdown_app = SnapdownEframeApp {
         picked_path: None,
         state: SnapdownState::Idle,
         send_from_filepicker: send_from_filepicker,
         recv_from_filepicker: recv_from_filepicker,
+        send_from_downloader: send_from_downloader,
+        recv_from_downloader: recv_from_downloader,
+        messages_console: Vec::new(),
     };
 
     // Have the GUI take care of getting args from the user
@@ -247,22 +272,60 @@ fn run_gui() -> Result<()> {
     .map_err(|e| anyhow::anyhow!("Failed to run GUI: {}", e))
 }
 
-fn run_downloader(input_csv: &str, output_dir: &str, jobs: usize) -> Result<()> {
+fn log_message(gui_console: &Option<mpsc::Sender<String>>, message: String) {
+    match gui_console {
+        Some(sender) => {
+            sender.send(message).unwrap_or_else(|e| {
+                eprintln!("Error sending message to GUI console: {}", e);
+            });
+        }
+        None => {
+            println!("{}", message);
+        }
+    }
+}
+
+fn log_error(gui_console: &Option<mpsc::Sender<String>>, message: String) {
+    match gui_console {
+        Some(sender) => {
+            sender.send(message).unwrap_or_else(|e| {
+                eprintln!("Error sending message to GUI console: {}", e);
+            });
+        }
+        None => {
+            eprintln!("{}", message);
+        }
+    }
+}
+
+fn run_downloader(
+    input_csv: &str,
+    output_dir: &str,
+    jobs: usize,
+    gui_console: Option<mpsc::Sender<String>>,
+) -> Result<()> {
     // Configure Rayon thread pool
     rayon::ThreadPoolBuilder::new()
         .num_threads(jobs)
         .build_global()
         .unwrap();
 
-    println!("Creating output directory if it doesn't exist...");
+    log_message(
+        &gui_console,
+        "Creating output directory if it doesn't exist...".to_string(),
+    );
+
     fs::create_dir_all(output_dir)?;
-    println!("Reading CSV file...");
+    log_message(&gui_console, "Reading CSV file...".to_string());
     let mut rdr = Reader::from_path(input_csv)?;
 
     // Collect all records first
     let records: Vec<_> = rdr.records().collect::<Result<_, _>>()?;
 
-    println!("Downloading {} files:", records.len());
+    log_message(
+        &gui_console,
+        format!("Downloading {} files:", records.len()),
+    );
     // Each row is of the form (timestamp_utc, format, latitude, longitude, download_url)
     records.par_iter().for_each(|row| {
         let timestamp_str = row[0].replace(' ', "_").replace(':', "-");
@@ -284,14 +347,20 @@ fn run_downloader(input_csv: &str, output_dir: &str, jobs: usize) -> Result<()> 
         let path = Path::new(output_dir).join(filename);
 
         if path.exists() {
-            println!("  * File already exists; skipping download: {:?}", path);
+            log_message(
+                &gui_console,
+                format!("  * File already exists; skipping download: {:?}", path),
+            );
             return;
         }
 
         let mut file = match File::create(&path) {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("  * Error creating file {:?}: {}", path, e);
+                log_error(
+                    &gui_console,
+                    format!("  * Error creating file {:?}: {}", path, e),
+                );
                 return;
             }
         };
@@ -299,7 +368,10 @@ fn run_downloader(input_csv: &str, output_dir: &str, jobs: usize) -> Result<()> 
         let mut resp = match ureq::get(download_url).call() {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("  * Error downloading from {}: {}", download_url, e);
+                log_error(
+                    &gui_console,
+                    format!("  * Error downloading from {}: {}", download_url, e),
+                );
                 return;
             }
         };
@@ -307,9 +379,12 @@ fn run_downloader(input_csv: &str, output_dir: &str, jobs: usize) -> Result<()> 
         match copy(&mut resp.body_mut().as_reader(), &mut file) {
             Ok(_) => println!("  * Downloaded {}", download_url),
             Err(e) => {
-                eprintln!(
-                    "  * Downloaded, but error writing to file {:?}: {}",
-                    path, e
+                log_error(
+                    &gui_console,
+                    format!(
+                        "  * Downloaded, but error writing to file {:?}: {}",
+                        path, e
+                    ),
                 );
             }
         }
