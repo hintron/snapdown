@@ -83,12 +83,7 @@ impl eframe::App for SnapdownEframeApp {
                         ui.label("Picked file:");
                         ui.monospace(picked_path);
                     });
-                }
-                None => {}
-            }
 
-            match &self.picked_path {
-                Some(picked_path) => {
                     if ui.button("Run SnapDown").clicked() {
                         let picked_path = picked_path.clone();
                         let send_from_downloader_clone = self.send_from_downloader.clone();
