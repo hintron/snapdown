@@ -6,10 +6,15 @@ use std::path::Path;
 use std::sync::mpsc;
 
 use anyhow::Result;
+use chrono;
 use circular_buffer::CircularBuffer;
 use csv::Reader;
 use eframe::egui;
+use env_logger::{Builder, Env};
+use log::{debug, error, info};
 use rayon::prelude::*;
+use std::fs::OpenOptions;
+use std::io::Write;
 use ureq;
 
 struct SnapdownStatus {
@@ -61,7 +66,7 @@ impl eframe::App for SnapdownEframeApp {
                             // Once file is picked, send it back to the UI thread
                             match send_from_filepicker_clone.send(path.display().to_string()) {
                                 Err(e) => {
-                                    eprintln!("Error sending picked file path to UI thread: {}", e);
+                                    error!("Error sending picked file path to UI thread: {}", e);
                                 }
                                 _ => {}
                             }
@@ -75,7 +80,7 @@ impl eframe::App for SnapdownEframeApp {
             self.recv_from_filepicker
                 .try_iter()
                 .for_each(|picked_path| {
-                    println!(
+                    info!(
                         "Picked file and received it from picker thread: {}",
                         picked_path
                     );
@@ -104,8 +109,8 @@ impl eframe::App for SnapdownEframeApp {
                                 Some(send_logs_from_downloader_clone),
                                 Some(send_status_from_downloader_clone),
                             ) {
-                                Ok(_) => println!("SnapDown completed successfully."),
-                                Err(e) => eprintln!("Error running SnapDown: {}", e),
+                                Ok(_) => info!("SnapDown completed successfully."),
+                                Err(e) => error!("Error running SnapDown: {}", e),
                             }
                         });
                         self.state = SnapdownState::Downloading;
@@ -150,7 +155,7 @@ impl eframe::App for SnapdownEframeApp {
                     ui.label(format!("Skipped: {}", self.skip_count));
                 }
             }
-            ui.heading("Console Log (last 1024 messages)");
+            ui.heading("Console Log (last 1024 messages only; see snapdown.log for full log)");
             ui.separator();
             ////////////////////////////////////////////////////////////////////
             // Console Log Section
@@ -291,15 +296,54 @@ fn parse_args() -> Result<Args> {
     }
 }
 
+fn init_logging() {
+    let file = match OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("snapdown.log")
+    {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error opening log file snapdown.log: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // Set all dependencies to log at error, and all snapdown logs to info
+    // Pipe the output to the log file
+    Builder::from_env(Env::new().filter_or("SNAPDOWN_LOG", "error,snapdown=info"))
+        .target(env_logger::Target::Pipe(Box::new(file)))
+        .format(move |buf, record| {
+            writeln!(
+                buf,
+                "[{}][{}] {}",
+                record.level(),
+                record.target(),
+                record.args()
+            )
+        })
+        .init();
+}
+
 fn main() -> Result<()> {
     let args = parse_args()?;
 
+    init_logging();
+
     if args.cli {
-        println!("Input CSV: {}", args.input_csv);
-        println!("Output directory: {}", args.output_dir);
-        println!("Parallel jobs: {}", args.jobs);
+        info!(
+            "[{}] Starting SnapDown (CLI mode)...",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+        );
+        info!("Input CSV: {}", args.input_csv);
+        info!("Output directory: {}", args.output_dir);
+        info!("Parallel jobs: {}", args.jobs);
         return run_downloader(&args.input_csv, &args.output_dir, args.jobs, None, None);
     } else {
+        info!(
+            "[{}] Starting SnapDown (GUI mode)...",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+        );
         return run_gui();
     }
 }
@@ -338,28 +382,26 @@ fn run_gui() -> Result<()> {
 }
 
 fn log_message(gui_console: &Option<mpsc::Sender<String>>, message: String) {
+    info!("{}", &message);
     match gui_console {
         Some(sender) => {
             sender.send(message).unwrap_or_else(|e| {
-                eprintln!("Error sending message to GUI console: {}", e);
+                error!("Error sending message to GUI console: {}", e);
             });
         }
-        None => {
-            println!("{}", message);
-        }
+        None => {}
     }
 }
 
 fn log_error(gui_console: &Option<mpsc::Sender<String>>, message: String) {
+    error!("{}", &message);
     match gui_console {
         Some(sender) => {
             sender.send(message).unwrap_or_else(|e| {
-                eprintln!("Error sending message to GUI console: {}", e);
+                error!("Error sending message to GUI console: {}", e);
             });
         }
-        None => {
-            eprintln!("{}", message);
-        }
+        None => {}
     }
 }
 
@@ -417,10 +459,7 @@ fn run_downloader(
         let path = Path::new(output_dir).join(filename);
 
         if path.exists() {
-            log_message(
-                &gui_console,
-                format!("  * File already exists; skipping download: {:?}", path),
-            );
+            debug!("  * File already exists; skipping download: {:?}", path);
             skip_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return;
         }
@@ -453,7 +492,7 @@ fn run_downloader(
 
         match copy(&mut resp.body_mut().as_reader(), &mut file) {
             Ok(_) => {
-                log_message(&gui_console, format!("  * Downloaded {}", download_url));
+                debug!("  * Downloaded {}", download_url);
                 success_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
             Err(e) => {
@@ -481,7 +520,7 @@ fn run_downloader(
                     skip_count: total_skip,
                 };
                 sender.send(status).unwrap_or_else(|e| {
-                    eprintln!("Error sending status to GUI: {}", e);
+                    error!("Error sending status to GUI: {}", e);
                 });
             }
             None => {}
@@ -501,7 +540,7 @@ fn run_downloader(
                 skip_count: skip_count,
             };
             sender.send(status).unwrap_or_else(|e| {
-                eprintln!("Error sending status to GUI: {}", e);
+                error!("Error sending status to GUI: {}", e);
             });
         }
         None => {}
