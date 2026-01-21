@@ -10,6 +10,7 @@ use chrono;
 use circular_buffer::CircularBuffer;
 use csv::Reader;
 use eframe::egui;
+use egui::{Color32, FontId, TextStyle};
 use env_logger::{Builder, Env};
 use log::{debug, error, info};
 use rayon::prelude::*;
@@ -46,36 +47,74 @@ struct SnapdownEframeApp {
     skip_count: usize,
     // This will act as a circular buffer to limit memory usage
     messages_console: CircularBuffer<1024, String>,
+    // Flag to ensure style is only on the first update, then saved to context
+    style_applied: bool,
 }
 
 impl eframe::App for SnapdownEframeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Set up custom styling (do this only once)
+        if !self.style_applied {
+            let mut style = (*ctx.style()).clone();
+
+            style.visuals.window_fill = Color32::YELLOW;
+            style.visuals.panel_fill = Color32::YELLOW;
+            style.visuals.extreme_bg_color = Color32::WHITE;
+            // style.visuals.override_text_color = Some(Color32::BLACK);
+
+            style.visuals.window_corner_radius = egui::CornerRadius::same(6);
+            style.visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(6);
+            style.visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(6);
+            style.visuals.widgets.active.corner_radius = egui::CornerRadius::same(6);
+
+            style.spacing.button_padding = egui::vec2(12.0, 8.0);
+            style.spacing.item_spacing = egui::vec2(10.0, 10.0);
+
+            style
+                .text_styles
+                .insert(TextStyle::Heading, FontId::proportional(24.0));
+            style
+                .text_styles
+                .insert(TextStyle::Body, FontId::proportional(16.0));
+            style
+                .text_styles
+                .insert(TextStyle::Button, FontId::proportional(16.0));
+
+            ctx.set_style(style);
+            self.style_applied = true;
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ////////////////////////////////////////////////////////////////////
             // Header/Control Section
             ////////////////////////////////////////////////////////////////////
-            ui.heading("SnapDown: Download SnapChat files quickly!");
+            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                ui.heading("SnapDown: Download SnapChat files quickly!");
 
-            if ui.button("Open .csv file...").clicked() {
-                // Open file dialog in separate thread to avoid blocking UI
-                // Clone the sender for use in the thread
-                let send_from_filepicker_clone = self.send_from_filepicker.clone();
-                std::thread::spawn(move || {
-                    match rfd::FileDialog::new().pick_file() {
-                        Some(path) => {
-                            // Once file is picked, send it back to the UI thread
-                            match send_from_filepicker_clone.send(path.display().to_string()) {
-                                Err(e) => {
-                                    error!("Error sending picked file path to UI thread: {}", e);
+                if ui.button("Open .csv file...").clicked() {
+                    // Open file dialog in separate thread to avoid blocking UI
+                    // Clone the sender for use in the thread
+                    let send_from_filepicker_clone = self.send_from_filepicker.clone();
+                    std::thread::spawn(move || {
+                        match rfd::FileDialog::new().pick_file() {
+                            Some(path) => {
+                                // Once file is picked, send it back to the UI thread
+                                match send_from_filepicker_clone.send(path.display().to_string()) {
+                                    Err(e) => {
+                                        error!(
+                                            "Error sending picked file path to UI thread: {}",
+                                            e
+                                        );
+                                    }
+                                    _ => {}
                                 }
-                                _ => {}
                             }
+                            _ => {}
                         }
-                        _ => {}
-                    }
-                });
-                self.state = SnapdownState::SelectingFile;
-            }
+                    });
+                    self.state = SnapdownState::SelectingFile;
+                }
+            });
 
             self.recv_from_filepicker
                 .try_iter()
@@ -90,31 +129,31 @@ impl eframe::App for SnapdownEframeApp {
 
             match &self.picked_path {
                 Some(picked_path) => {
-                    ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                         ui.label("Picked file:");
                         ui.monospace(picked_path);
-                    });
 
-                    if ui.button("Run SnapDown").clicked() {
-                        let picked_path = picked_path.clone();
-                        let send_logs_from_downloader_clone =
-                            self.send_logs_from_downloader.clone();
-                        let send_status_from_downloader_clone =
-                            self.send_status_from_downloader.clone();
-                        std::thread::spawn(move || {
-                            match run_downloader(
-                                &picked_path,
-                                "snapdown_output",
-                                DEFAULT_NUM_JOBS,
-                                Some(send_logs_from_downloader_clone),
-                                Some(send_status_from_downloader_clone),
-                            ) {
-                                Ok(_) => info!("SnapDown completed successfully."),
-                                Err(e) => error!("Error running SnapDown: {}", e),
-                            }
-                        });
-                        self.state = SnapdownState::Downloading;
-                    }
+                        if ui.button("Run SnapDown").clicked() {
+                            let picked_path = picked_path.clone();
+                            let send_logs_from_downloader_clone =
+                                self.send_logs_from_downloader.clone();
+                            let send_status_from_downloader_clone =
+                                self.send_status_from_downloader.clone();
+                            std::thread::spawn(move || {
+                                match run_downloader(
+                                    &picked_path,
+                                    "snapdown_output",
+                                    DEFAULT_NUM_JOBS,
+                                    Some(send_logs_from_downloader_clone),
+                                    Some(send_status_from_downloader_clone),
+                                ) {
+                                    Ok(_) => info!("SnapDown completed successfully."),
+                                    Err(e) => error!("Error running SnapDown: {}", e),
+                                }
+                            });
+                            self.state = SnapdownState::Downloading;
+                        }
+                    });
                 }
                 None => {}
             }
@@ -366,6 +405,7 @@ fn run_gui() -> Result<()> {
         error_count: 0,
         skip_count: 0,
         messages_console: CircularBuffer::<1024, String>::new(),
+        style_applied: false,
     };
 
     // Have the GUI take care of getting args from the user
