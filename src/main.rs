@@ -521,7 +521,10 @@ fn run_downloader(
         log_error(&gui_console, format!("  - Error: {} files", error_count));
     }
     if skip_count > 0 {
-        log_message(&gui_console, format!("  - Skipped: {} files", skip_count));
+        log_message(
+            &gui_console,
+            format!("  - Skipped: {} files (already existed)", skip_count),
+        );
     }
     log_message(&gui_console, format!("SnapDown completed"));
 
