@@ -294,11 +294,10 @@ fn parse_args() -> Result<Args> {
 fn main() -> Result<()> {
     let args = parse_args()?;
 
-    println!("Input CSV: {}", args.input_csv);
-    println!("Output directory: {}", args.output_dir);
-    println!("Parallel jobs: {}", args.jobs);
-
     if args.cli {
+        println!("Input CSV: {}", args.input_csv);
+        println!("Output directory: {}", args.output_dir);
+        println!("Parallel jobs: {}", args.jobs);
         return run_downloader(&args.input_csv, &args.output_dir, args.jobs, None, None);
     } else {
         return run_gui();
