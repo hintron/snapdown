@@ -147,11 +147,17 @@ impl eframe::App for SnapdownEframeApp {
                                     &picked_path,
                                     "snapdown_output",
                                     DEFAULT_NUM_JOBS,
-                                    Some(send_logs_from_downloader_clone),
-                                    Some(send_status_from_downloader_clone),
+                                    Some(&send_logs_from_downloader_clone),
+                                    Some(&send_status_from_downloader_clone),
                                 ) {
-                                    Ok(_) => info!("SnapDown completed successfully."),
-                                    Err(e) => error!("Error running SnapDown: {}", e),
+                                    Ok(_) => log_message(
+                                        Some(&send_logs_from_downloader_clone),
+                                        "SnapDown completed successfully.".to_string(),
+                                    ),
+                                    Err(e) => log_error(
+                                        Some(&send_logs_from_downloader_clone),
+                                        format!("Error running SnapDown: {}", e),
+                                    ),
                                 }
                             });
                             self.state = SnapdownState::Downloading;
@@ -424,7 +430,7 @@ fn run_gui() -> Result<()> {
     .map_err(|e| anyhow::anyhow!("Failed to run GUI: {}", e))
 }
 
-fn log_message(gui_console: &Option<mpsc::Sender<String>>, message: String) {
+fn log_message(gui_console: Option<&mpsc::Sender<String>>, message: String) {
     info!("{}", &message);
     match gui_console {
         Some(sender) => {
@@ -436,7 +442,7 @@ fn log_message(gui_console: &Option<mpsc::Sender<String>>, message: String) {
     }
 }
 
-fn log_error(gui_console: &Option<mpsc::Sender<String>>, message: String) {
+fn log_error(gui_console: Option<&mpsc::Sender<String>>, message: String) {
     error!("{}", &message);
     match gui_console {
         Some(sender) => {
@@ -544,8 +550,8 @@ fn run_downloader(
     input_file: &str,
     output_dir: &str,
     jobs: usize,
-    gui_console: Option<mpsc::Sender<String>>,
-    status_sender: Option<mpsc::Sender<SnapdownStatus>>,
+    gui_console: Option<&mpsc::Sender<String>>,
+    status_sender: Option<&mpsc::Sender<SnapdownStatus>>,
 ) -> Result<()> {
     // Configure Rayon thread pool
     rayon::ThreadPoolBuilder::new()
@@ -554,18 +560,18 @@ fn run_downloader(
         .unwrap();
 
     log_message(
-        &gui_console,
+        gui_console,
         "Creating output directory if it doesn't exist...".to_string(),
     );
 
     fs::create_dir_all(output_dir)?;
-    log_message(&gui_console, format!("Reading input file {input_file}..."));
+    log_message(gui_console, format!("Reading input file {input_file}..."));
 
     let records: Vec<_>;
     // Determine if this is memories_history.html or snap_export.csv
     if input_file.ends_with("memories_history.html") {
         log_message(
-            &gui_console,
+            gui_console,
             "Detected HTML file (memories_history.html). Converting to CSV format...".to_string(),
         );
 
@@ -766,7 +772,7 @@ fn run_downloader(
                 }
                 Err(e) => {
                     log_error(
-                        &gui_console,
+                        gui_console,
                         format!("Error reading HTML file {}: {}", input_file, e),
                     );
                     return Err(anyhow::anyhow!(
@@ -791,7 +797,7 @@ fn run_downloader(
         // records = rdr.records().collect::<Result<_, _>>()?;
     } else if input_file.ends_with("snap_export.csv") {
         log_message(
-            &gui_console,
+            gui_console,
             "Detected CSV file (snap_export.html). Extracting records...".to_string(),
         );
 
@@ -801,7 +807,7 @@ fn run_downloader(
         records = rdr.records().collect::<Result<_, _>>()?;
     } else {
         log_error(
-            &gui_console,
+            gui_console,
             "Input file is neither memories_history.html nor snap_export.csv format. Exiting."
                 .to_string(),
         );
@@ -810,10 +816,7 @@ fn run_downloader(
         ));
     }
 
-    log_message(
-        &gui_console,
-        format!("Downloading {} files:", records.len()),
-    );
+    log_message(gui_console, format!("Downloading {} files:", records.len()));
 
     let success_count = std::sync::atomic::AtomicUsize::new(0);
     let error_count = std::sync::atomic::AtomicUsize::new(0);
@@ -848,7 +851,7 @@ fn run_downloader(
             Ok(r) => r,
             Err(e) => {
                 log_error(
-                    &gui_console,
+                    gui_console,
                     format!("  * Error downloading from {}: {}", download_url, e),
                 );
                 error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -862,7 +865,7 @@ fn run_downloader(
             Ok(f) => f,
             Err(e) => {
                 log_error(
-                    &gui_console,
+                    gui_console,
                     format!("  * Error creating file {:?}: {}", path, e),
                 );
                 error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -877,7 +880,7 @@ fn run_downloader(
             }
             Err(e) => {
                 log_error(
-                    &gui_console,
+                    gui_console,
                     format!(
                         "  * Downloaded, but error writing to file {:?}: {}",
                         path, e
@@ -927,25 +930,22 @@ fn run_downloader(
     }
 
     log_message(
-        &gui_console,
+        gui_console,
         format!("Finished processing {} links", records.len()),
     );
     if success_count > 0 {
-        log_message(
-            &gui_console,
-            format!("  - Success: {} files", records.len()),
-        );
+        log_message(gui_console, format!("  - Success: {} files", records.len()));
     }
     if error_count > 0 {
-        log_error(&gui_console, format!("  - Error: {} files", error_count));
+        log_error(gui_console, format!("  - Error: {} files", error_count));
     }
     if skip_count > 0 {
         log_message(
-            &gui_console,
+            gui_console,
             format!("  - Skipped: {} files (already existed)", skip_count),
         );
     }
-    log_message(&gui_console, format!("SnapDown completed"));
+    log_message(gui_console, format!("SnapDown completed"));
 
     Ok(())
 }
