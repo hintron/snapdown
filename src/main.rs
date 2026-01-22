@@ -965,25 +965,6 @@ mod tests {
     }
 
     #[test]
-    fn test_look_html() {
-        let buffer = b"aslkdjflkasjdflk\n\n\nasdfasdf<><table>sadfasdf<tbody>";
-        let item1 = b"<table>";
-        let item2 = b"<tbody>";
-        let mut curr_index = 0;
-        match look_for_item(buffer, item1, false) {
-            SearchResult::Found(index) => {
-                assert_eq!(index, 29);
-                curr_index += index + item1.len();
-            }
-            _ => panic!("Expected to find item1 at index 29"),
-        }
-        match look_for_item(&buffer[curr_index..], item2, false) {
-            SearchResult::Found(index) => assert_eq!(index, 8),
-            _ => panic!("Expected to find item2 at index 8"),
-        }
-    }
-
-    #[test]
     fn test_look_for_item_not_found() {
         let buffer = b"hello world";
         let item = b"missing";
@@ -1075,6 +1056,25 @@ mod tests {
         match look_for_item(buffer, item, true) {
             SearchResult::NotFound => {}
             _ => panic!("Expected NotFound when is_last=true"),
+        }
+    }
+
+    #[test]
+    fn test_look_html() {
+        let buffer = b"aslkdjflkasjdflk\n\n\nasdfasdf<><table>sadfasdf<tbody>";
+        let item1 = b"<table>";
+        let item2 = b"<tbody>";
+        let mut curr_index = 0;
+        match look_for_item(buffer, item1, false) {
+            SearchResult::Found(index) => {
+                assert_eq!(index, 29);
+                curr_index += index + item1.len();
+            }
+            _ => panic!("Expected to find item1 at index 29"),
+        }
+        match look_for_item(&buffer[curr_index..], item2, false) {
+            SearchResult::Found(index) => assert_eq!(index, 8),
+            _ => panic!("Expected to find item2 at index 8"),
         }
     }
 }
