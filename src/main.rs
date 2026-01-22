@@ -945,7 +945,6 @@ fn run_downloader(
             format!("  - Skipped: {} files (already existed)", skip_count),
         );
     }
-    log_message(gui_console, format!("SnapDown completed"));
 
     Ok(())
 }
