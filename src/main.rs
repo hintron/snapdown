@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
 use std::fs::{self, File};
-use std::io::{Read, copy};
+use std::io::{BufRead, BufReader, copy};
 use std::path::Path;
 use std::sync::mpsc;
 
@@ -546,6 +546,206 @@ fn look_for_item(buffer: &[u8], item: &[u8], is_last: bool) -> SearchResult {
     SearchResult::NotFoundWithUnprocessed(unprocessed)
 }
 
+#[derive(Debug)]
+enum SdParseState {
+    SearchingForTable,
+    SearchingForTbody,
+    SearchingForTr,
+    SearchingForTh,
+    SearchingForThEnd,
+    SearchingForThClosing,
+    SearchingForTd,
+    SearchingForTdEnd,
+    SearchingForTdClosing,
+    SearchingForDownloadLink,
+    SearchingForDownloadLinkEnd,
+    // SearchingForTrClosing,
+    // SearchingForTableClosing,
+    // SearchingForTbodyClosing,
+    // SearchingForHtmlTagEnd,
+    // SearchingForHtmlTagStart,
+    // SearchingForNextNonWhitespace,
+    // SearchingForAttribute,
+    // SearchingForAttributeEnd,
+    // SearchingForAttributeValueStart,
+    // SearchingForAttributeValueEnd,
+    // SearchingForQuote,
+    // SearchingForQuoteEnd,
+    // LookingForDate,
+    // LookingForMediaType,
+    // LookingForLocation,
+    // LookingForDownloadLink,
+}
+
+// fn parse_next(buffer: &[u8], state: &SdParseState) -> usize {
+//     return 0;
+// }
+
+fn parse_memories_history_html(
+    input_file: &str,
+    gui_console: Option<&mpsc::Sender<String>>,
+) -> Result<Vec<csv::StringRecord>> {
+    log_message(
+        gui_console,
+        "Detected HTML file (memories_history.html). Converting to CSV format...".to_string(),
+    );
+
+    // Read HTML file and convert to CSV format
+    let html_file = File::open(input_file)?;
+    const BUFFER_SIZE: usize = 1024 * 16;
+    let mut html_reader = BufReader::with_capacity(BUFFER_SIZE, html_file);
+
+    let mut csv_records: Vec<csv::StringRecord> = Vec::new();
+    let mut file_byte_index = 0u64;
+    let mut parse_state = SdParseState::SearchingForTable;
+    let mut header_column_count = 0usize;
+    let mut row_column_count = 0usize;
+    let mut current_record = csv::StringRecord::new();
+    const EXPECTED_COLUMNS: usize = 4;
+
+    loop {
+        // Parsing logic
+        // For an example of the HTML data we want to parse, see test_parse_html_snippet()
+
+        // Determine if there is anything we need to grab before looking for the
+        // next tag, and set what tag to look for next
+        let tag = match parse_state {
+            SdParseState::SearchingForTable => Some("<table>".as_bytes()),
+            SdParseState::SearchingForTbody => Some("<tbody>".as_bytes()),
+            SdParseState::SearchingForTr => Some("<tr>".as_bytes()),
+            SdParseState::SearchingForTh => Some("<th".as_bytes()),
+            SdParseState::SearchingForThEnd => Some(">".as_bytes()),
+            SdParseState::SearchingForThClosing => Some("</th>".as_bytes()),
+            SdParseState::SearchingForTd => Some("<td".as_bytes()),
+            SdParseState::SearchingForTdEnd => Some(">".as_bytes()),
+            SdParseState::SearchingForTdClosing => Some("</td>".as_bytes()),
+            SdParseState::SearchingForDownloadLink => Some("downloadMemories('".as_bytes()),
+            SdParseState::SearchingForDownloadLinkEnd => Some("',".as_bytes()),
+            // SdParseState::SearchingForTrClosing => Some("</tr>".as_bytes()),
+            // SdParseState::SearchingForHtmlTagEnd => Some(">".as_bytes()),
+            // _ => None,
+        };
+
+        match tag {
+            Some(tag) => {
+                // Since we are looking for a tag, read in data and search for it
+                let buffer = html_reader.fill_buf()?;
+                if buffer.is_empty() {
+                    break; // EOF
+                }
+
+                let is_last = buffer.len() < BUFFER_SIZE;
+                log_message(
+                    gui_console,
+                    format!(
+                        "{}: Parsing {} bytes... (is_last={})",
+                        file_byte_index,
+                        buffer.len(),
+                        is_last
+                    ),
+                );
+                let processed;
+                match look_for_item(&buffer, tag, is_last) {
+                    SearchResult::Found(index) => {
+                        info!("Found {:?} at buffer byte index {index}", tag);
+                        processed = index + tag.len();
+
+                        // Move on to next tag
+                        parse_state = match parse_state {
+                            SdParseState::SearchingForTable => SdParseState::SearchingForTbody,
+                            SdParseState::SearchingForTbody => SdParseState::SearchingForTr,
+                            SdParseState::SearchingForTr => {
+                                if header_column_count == 0 {
+                                    SdParseState::SearchingForTh
+                                } else {
+                                    SdParseState::SearchingForTd
+                                }
+                            }
+                            SdParseState::SearchingForTh => SdParseState::SearchingForThEnd,
+                            SdParseState::SearchingForThEnd => SdParseState::SearchingForThClosing,
+                            SdParseState::SearchingForThClosing => {
+                                current_record
+                                    .push_field(&String::from_utf8_lossy(&buffer[..index]).trim());
+                                header_column_count += 1;
+                                if header_column_count >= EXPECTED_COLUMNS {
+                                    // Validate that the data looks as expected
+
+
+                                    // Finished header row
+                                    csv_records.push(current_record.clone());
+                                    // Reset for data row
+                                    current_record.clear();
+                                    SdParseState::SearchingForTr
+                                } else {
+                                    // Keep looking for header columns
+                                    SdParseState::SearchingForTh
+                                }
+                            }
+                            SdParseState::SearchingForTd => SdParseState::SearchingForTdEnd,
+                            SdParseState::SearchingForTdEnd => {
+                                if row_column_count == 3 {
+                                    // Look for the download link inside this td
+                                    SdParseState::SearchingForDownloadLink
+                                } else {
+                                    // Generic td content - save it all
+                                    SdParseState::SearchingForTdClosing
+                                }
+                            }
+                            SdParseState::SearchingForTdClosing => {
+                                current_record
+                                    .push_field(&String::from_utf8_lossy(&buffer[..index]).trim());
+                                row_column_count += 1;
+                                if row_column_count == 3 {
+                                    // Parse the last column, the download link
+                                    SdParseState::SearchingForDownloadLink
+                                } else {
+                                    // Keep looking for more row data columns
+                                    SdParseState::SearchingForTd
+                                }
+                            }
+                            // SdParseState::SearchingForTrClosing => SdParseState::SearchingForTr,
+                            SdParseState::SearchingForDownloadLink => {
+                                SdParseState::SearchingForDownloadLinkEnd
+                            }
+                            SdParseState::SearchingForDownloadLinkEnd => {
+                                // This should be the last column in the row
+                                if row_column_count + 1 != EXPECTED_COLUMNS {
+                                    log_error(
+                                        gui_console,
+                                        format!(
+                                            "Row {} had an unexpected number of columns",
+                                            row_column_count
+                                        ),
+                                    );
+                                }
+                                current_record
+                                    .push_field(&String::from_utf8_lossy(&buffer[..index]).trim());
+                                csv_records.push(current_record.clone());
+                                // Reset for next data row
+                                current_record.clear();
+                                row_column_count = 0;
+                                // Skip looking for td end, since we got what we
+                                // wanted. Move on to next data row
+                                SdParseState::SearchingForTr
+                            } // state => unimplemented!("Unhandled parse state: {:?}", state),
+                        }
+                    }
+                    SearchResult::NotFoundWithUnprocessed(n) => processed = buffer.len() - n,
+                    SearchResult::NotFound => processed = buffer.len(),
+                }
+
+                // Parsing progress has been made; advance internal cursor
+                html_reader.consume(processed);
+                file_byte_index += processed as u64;
+            }
+            None => {}
+        }
+    }
+
+    info!("Finished reading HTML file.");
+    Ok(csv_records)
+}
+
 fn run_downloader(
     input_file: &str,
     output_dir: &str,
@@ -570,231 +770,7 @@ fn run_downloader(
     let records: Vec<_>;
     // Determine if this is memories_history.html or snap_export.csv
     if input_file.ends_with("memories_history.html") {
-        log_message(
-            gui_console,
-            "Detected HTML file (memories_history.html). Converting to CSV format...".to_string(),
-        );
-
-        // <table>
-        // <tbody>
-        // <tr>
-        // <th style="white-space: nowrap; overflow: hidden;"><b>Date</b></th>
-        // <th style="white-space: nowrap; overflow: hidden;"><b>Media Type</b></th>
-        // <th style="white-space: nowrap; overflow: hidden;"><b>Location</b></th>
-        // <th style="white-space: nowrap; overflow: hidden;"><b></b></th>
-        // </tr>
-        // <tr>
-        // <td>2026-01-13 01:55:38 UTC</td>
-        // <td>Image</td>
-        // <td>Latitude, Longitude: 40.25548, -111.645325</td>
-        // <td>
-        // <span class="require-js-enabled">
-        // <a href="#" onclick="downloadMemories('https://us-east1-aws.api.snapchat.com/dmd/mm?uid=16a89e68-6186-48f0-a907-f3dd6179db7a&sid=7550CF26-B1AC-4791-AE16-9F4F41A3C9E6&mid=7550CF26-B1AC-4791-AE16-9F4F41A3C9E6&ts=1768335041137&sig=7466d93e57125e382209a153608a41fe7530d2aa073d3859db3896121ca6170b', this, true); return false;" style="color: #0099FF; text-decoration: underline;">Download</a>
-        // </span>
-        // <noscript>
-        // <span style="color: #999; font-style: italic;">Requires JavaScript</span>
-        // </noscript>
-        // </td>
-        // </tr>
-        // ...
-
-        // Read HTML file and convert to CSV format
-        let html_file = File::open(input_file)?;
-        let file_size = html_file.metadata()?.len();
-        let mut html_reader = std::io::BufReader::new(html_file);
-        let mut total_bytes_read = 0;
-        const BUFFER_SIZE: usize = 1024 * 16;
-        // const BUFFER_SIZE: usize = 1024 * 30;
-        let mut buffer = [0; BUFFER_SIZE];
-        let mut chunk_count = 0;
-        let mut leftover_bytes = Vec::new();
-        // let mut finished = false;
-        // let mut found_table_tag = false;
-        // let mut table_tag_byte_offset = 0;
-        // let mut leftover_bytes_unprocessed = 0;
-
-        loop {
-            match html_reader.read(&mut buffer) {
-                Ok(0) => {
-                    // finished = true;
-                    break;
-                }
-                Ok(n) => {
-                    let tag = b"<table>";
-
-                    if leftover_bytes.len() > 0 {
-                        // Stitch the first bytes of the incoming chunk so we can
-                        // finish processing the last portion of the previous chunk
-                        leftover_bytes.extend_from_slice(&buffer[0..(tag.len() - 1)]);
-                        match look_for_item(&leftover_bytes, tag, true) {
-                            SearchResult::Found(index) => {
-                                info!(
-                                    "Found tag {:?} spanning boundary between chunks {} and {} at chunk:index {}:{index}",
-                                    tag,
-                                    chunk_count - 1,
-                                    chunk_count,
-                                    chunk_count - 1
-                                );
-                                // MGH TODO: Move on to next tag
-                            }
-                            SearchResult::NotFound => {
-                                // Do nothing
-                            }
-                            _ => unreachable!(),
-                        }
-                        leftover_bytes.clear();
-                    }
-
-                    let is_last_buffer = if (n as u64) + total_bytes_read >= file_size {
-                        true
-                    } else {
-                        false
-                    };
-
-                    match look_for_item(&buffer, tag, is_last_buffer) {
-                        SearchResult::Found(index) => {
-                            info!("Found tag {:?} at chunk:index {chunk_count}:{index}", tag,);
-                            // MGH TODO: Move on to next tag
-                        }
-                        SearchResult::NotFoundWithUnprocessed(unprocessed) => {
-                            // Save the last unprocessed bytes for the next iteration
-                            leftover_bytes.clear();
-                            leftover_bytes.extend_from_slice(&buffer[(n - unprocessed)..n]);
-                        }
-                        SearchResult::NotFound => {
-                            // Do nothing, continue reading
-                        }
-                    }
-
-                    total_bytes_read += n as u64;
-                    chunk_count += 1;
-                    info!("Read {} bytes from HTML file (chunk #{})", n, chunk_count);
-
-                    // std::process::exit(0);
-                    // while i < n {
-                    //     if let Some(tr_start) = find_pattern(&html_bytes[i..], b"<tr>") {
-                    //         i += tr_start + 4; // Move past <tr>
-
-                    //         // Skip the header row (first <tr> with <th> elements)
-                    //         if let Some(th_pos) = find_pattern(&html_bytes[i..], b"<th") {
-                    //             // Skip to next <tr>
-                    //             if let Some(tr_end) = find_pattern(&html_bytes[i..], b"</tr>") {
-                    //                 i += tr_end + 5;
-                    //                 found_data_rows = true;
-                    //                 continue;
-                    //             }
-                    //         }
-
-                    //         if !found_data_rows {
-                    //             continue;
-                    //         }
-
-                    //         // Parse data row
-                    //         let mut row_data = Vec::new();
-                    //         let mut td_count = 0;
-
-                    //         // Find all <td> elements in this row
-                    //         let mut row_pos = current_pos;
-                    //         let row_end = if let Some(end) = find_pattern(&html_bytes[row_pos..], b"</tr>") {
-                    //             row_pos + end
-                    //         } else {
-                    //             html_bytes.len()
-                    //         };
-
-                    //         while row_pos < row_end && td_count < 4 {
-                    //             if let Some(td_start) = find_pattern(&html_bytes[row_pos..], b"<td") {
-                    //                 row_pos += td_start;
-
-                    //                 // Find the end of opening <td> tag
-                    //                 if let Some(tag_end) = find_pattern(&html_bytes[row_pos..], b">") {
-                    //                     row_pos += tag_end + 1;
-
-                    //                     // Find closing </td>
-                    //                     if let Some(td_end) = find_pattern(&html_bytes[row_pos..], b"</td>") {
-                    //                         let td_content = &html_bytes[row_pos..row_pos + td_end];
-
-                    //                         match td_count {
-                    //                             0 => {
-                    //                                 // Date
-                    //                                 let date_str = String::from_utf8_lossy(td_content).trim().to_string();
-                    //                                 row_data.push(date_str);
-                    //                             }
-                    //                             1 => {
-                    //                                 // Media Type
-                    //                                 let media_type = String::from_utf8_lossy(td_content).trim().to_string();
-                    //                                 row_data.push(media_type);
-                    //                             }
-                    //                             2 => {
-                    //                                 // Location - extract coordinates
-                    //                                 let location = String::from_utf8_lossy(td_content);
-                    //                                 if let (Some(lat), Some(lng)) = extract_coordinates(&location) {
-                    //                                     row_data.push(lat);
-                    //                                     row_data.push(lng);
-                    //                                 } else {
-                    //                                     row_data.push("0".to_string());
-                    //                                     row_data.push("0".to_string());
-                    //                                 }
-                    //                             }
-                    //                             3 => {
-                    //                                 // Download link - extract URL from onclick
-                    //                                 if let Some(url) = extract_download_url(td_content) {
-                    //                                     row_data.push(url);
-                    //                                 } else {
-                    //                                     row_data.push("".to_string());
-                    //                                 }
-                    //                             }
-                    //                             _ => {}
-                    //                         }
-
-                    //                         row_pos += td_end + 5; // Move past </td>
-                    //                         td_count += 1;
-                    //                     } else {
-                    //                         break;
-                    //                     }
-                    //                 } else {
-                    //                     break;
-                    //                 }
-                    //             } else {
-                    //                 break;
-                    //             }
-                    //         }
-
-                    //         // If we found a complete row with data, add it
-                    //         if row_data.len() == 5 && !row_data[4].is_empty() {
-                    //             csv_records.push(row_data);
-                    //         }
-
-                    //         current_pos = row_end + 5; // Move past </tr>
-                    //     } else {
-                    //         break;
-                    //     }
-                    // }
-                }
-                Err(e) => {
-                    log_error(
-                        gui_console,
-                        format!("Error reading HTML file {}: {}", input_file, e),
-                    );
-                    return Err(anyhow::anyhow!(
-                        "Error reading HTML file {}: {}",
-                        input_file,
-                        e
-                    ));
-                }
-            }
-        }
-
-        info!("Finished reading HTML file.");
-        std::process::exit(0);
-        // // Write records to CSV
-        // for record in &csv_records {
-        //     csv_writer.write_record(record)?;
-        // }
-        // csv_writer.flush()?;
-
-        // let mut rdr = Reader::from_path(&csv_path)?;
-
-        // records = rdr.records().collect::<Result<_, _>>()?;
+        records = parse_memories_history_html(input_file, gui_console)?;
     } else if input_file.ends_with("snap_export.csv") {
         log_message(
             gui_console,
@@ -1075,6 +1051,75 @@ mod tests {
         match look_for_item(&buffer[curr_index..], item2, false) {
             SearchResult::Found(index) => assert_eq!(index, 8),
             _ => panic!("Expected to find item2 at index 8"),
+        }
+    }
+
+    #[test]
+    fn test_parse_html_snippet() {
+        let test_file_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test")
+            .join("test.html");
+
+        println!("Test file path: {:?}", test_file_path);
+        // Parse the headers and rows from this HTML snippet, starting at
+        // the first <table> tag.
+        match parse_memories_history_html(test_file_path.to_str().unwrap(), None) {
+            Ok(records) => {
+                // Assert the header record
+                assert_eq!(records[0].len(), 4, "Expected 4 fields in header row");
+                assert_eq!(
+                    records[0].get(0).unwrap(),
+                    "<b>Date</b>",
+                    "Expected header row field 0 to be (right)"
+                );
+                assert_eq!(
+                    records[0].get(1).unwrap(),
+                    "<b>Media Type</b>",
+                    "Expected header row field 1 to be (right)"
+                );
+                assert_eq!(
+                    records[0].get(2).unwrap(),
+                    "<b>Location</b>",
+                    "Expected header row field 2 to be (right)"
+                );
+                assert_eq!(
+                    records[0].get(3).unwrap(),
+                    "<b></b>",
+                    "Expected header row field 3 to be (right)"
+                );
+
+                println!("Header Row 0: {:?}", records[0]);
+                println!("Row 0: {:?}", records[1]);
+
+                // Assert the first record of data\
+                assert_eq!(records[1].len(), 4, "Expected 4 fields in record 0");
+                assert_eq!(
+                    records[1].get(0).unwrap(),
+                    "2026-01-13 01:55:38 UTC",
+                    "Expected record 0 field 0 to be (right)"
+                );
+                assert_eq!(
+                    records[1].get(1).unwrap(),
+                    "Image",
+                    "Expected record 0 field 1 to be (right)"
+                );
+                assert_eq!(
+                    records[1].get(2).unwrap(),
+                    "Latitude, Longitude: 40.25548, -111.645325",
+                    "Expected record 0 field 2 to be (right)"
+                );
+                assert_eq!(
+                    records[1].get(3).unwrap(),
+                    "https://us-east1-aws.api.snapchat.com/dmd/mm?uid=bogus-1&sid=bogus-2&mid=bogus-3&ts=1768335041137&sig=bogus-4",
+                    "Expected record 0 field 3 to be (right)"
+                );
+
+                // For this test, we expect 0 records since the HTML is incomplete
+                assert_eq!(records.len(), 4, "Expected (right) total records");
+            }
+            Err(e) => {
+                panic!("Error loading or parsing HTML snippet: {}", e);
+            }
         }
     }
 }
