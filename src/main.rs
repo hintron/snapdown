@@ -680,9 +680,6 @@ fn parse_memories_history_html(
                                     .push_field(&String::from_utf8_lossy(&buffer[..index]).trim());
                                 header_column_count += 1;
                                 if header_column_count >= EXPECTED_COLUMNS {
-                                    // Validate that the data looks as expected
-
-
                                     // Finished header row
                                     csv_records.push(current_record.clone());
                                     // Reset for data row
