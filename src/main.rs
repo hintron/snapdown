@@ -776,10 +776,12 @@ fn run_downloader(
     fs::create_dir_all(output_dir)?;
     log_message(gui_console, format!("Reading input file {input_file}..."));
 
-    let records: Vec<_>;
+    let records_vec: Vec<_>;
+    let records: &[csv::StringRecord];
     // Determine if this is memories_history.html or snap_export.csv
     if input_file.ends_with("memories_history.html") {
-        records = parse_memories_history_html(input_file, gui_console)?;
+        records_vec = parse_memories_history_html(input_file, gui_console)?;
+        records = &records_vec[1..]; // Skip header row
     } else if input_file.ends_with("snap_export.csv") {
         log_message(
             gui_console,
@@ -789,7 +791,8 @@ fn run_downloader(
         let mut rdr = Reader::from_path(input_file)?;
 
         // Collect all records first
-        records = rdr.records().collect::<Result<_, _>>()?;
+        records_vec = rdr.records().collect::<Result<_, _>>()?; // No header row to skip
+        records = &records_vec[..]; // No header row is expected in this CSV
     } else {
         log_error(
             gui_console,
