@@ -641,7 +641,8 @@ fn parse_memories_history_html(
                     break; // EOF
                 }
 
-                let is_last = buffer.len() < BUFFER_SIZE;
+                let is_last = buffer.len() <= tag.len();
+
                 log_message(
                     gui_console,
                     format!(
