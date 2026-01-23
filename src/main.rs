@@ -617,19 +617,19 @@ fn parse_memories_history_html(
         // Determine if there is anything we need to grab before looking for the
         // next tag, and set what tag to look for next
         let tag = match parse_state {
-            SdParseState::SearchingForTable => Some("<table>".as_bytes()),
-            SdParseState::SearchingForTbody => Some("<tbody>".as_bytes()),
-            SdParseState::SearchingForTr => Some("<tr>".as_bytes()),
-            SdParseState::SearchingForTh => Some("<th".as_bytes()),
-            SdParseState::SearchingForThEnd => Some(">".as_bytes()),
-            SdParseState::SearchingForThClosing => Some("</th>".as_bytes()),
-            SdParseState::SearchingForTd => Some("<td".as_bytes()),
-            SdParseState::SearchingForTdEnd => Some(">".as_bytes()),
-            SdParseState::SearchingForTdClosing => Some("</td>".as_bytes()),
-            SdParseState::SearchingForDownloadLink => Some("downloadMemories('".as_bytes()),
-            SdParseState::SearchingForDownloadLinkEnd => Some("',".as_bytes()),
-            // SdParseState::SearchingForTrClosing => Some("</tr>".as_bytes()),
-            // SdParseState::SearchingForHtmlTagEnd => Some(">".as_bytes()),
+            SdParseState::SearchingForTable => Some("<table>"),
+            SdParseState::SearchingForTbody => Some("<tbody>"),
+            SdParseState::SearchingForTr => Some("<tr>"),
+            SdParseState::SearchingForTh => Some("<th"),
+            SdParseState::SearchingForThEnd => Some(">"),
+            SdParseState::SearchingForThClosing => Some("</th>"),
+            SdParseState::SearchingForTd => Some("<td"),
+            SdParseState::SearchingForTdEnd => Some(">"),
+            SdParseState::SearchingForTdClosing => Some("</td>"),
+            SdParseState::SearchingForDownloadLink => Some("downloadMemories('"),
+            SdParseState::SearchingForDownloadLinkEnd => Some("',"),
+            // SdParseState::SearchingForTrClosing => Some("</tr>"),
+            // SdParseState::SearchingForHtmlTagEnd => Some(">"),
             // _ => None,
         };
 
@@ -645,16 +645,21 @@ fn parse_memories_history_html(
                 log_message(
                     gui_console,
                     format!(
-                        "{}: Parsing {} bytes... (is_last={})",
+                        "File byte index {}: Parsing {} bytes for tag '{}'... (is_last={})",
                         file_byte_index,
                         buffer.len(),
+                        tag,
                         is_last
                     ),
                 );
                 let processed;
-                match look_for_item(&buffer, tag, is_last) {
+                match look_for_item(&buffer, tag.as_bytes(), is_last) {
                     SearchResult::Found(index) => {
-                        info!("Found {:?} at buffer byte index {index}", tag);
+                        info!(
+                            "Found '{}' at file byte index {} (buffer byte index {index})",
+                            tag,
+                            file_byte_index + (index as u64)
+                        );
                         processed = index + tag.len();
 
                         // Move on to next tag
