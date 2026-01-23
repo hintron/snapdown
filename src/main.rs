@@ -514,12 +514,19 @@ fn look_for_item(buffer: &[u8], item: &[u8], is_last: bool) -> SearchResult {
     let item_size = item.len();
     let buffer_size = buffer.len();
 
-    assert!(
-        item_size <= buffer_size,
-        "Item size cannot be larger than buffer size"
-    );
+    if buffer_size <= 0 {
+        // Empty buffer
+        return SearchResult::NotFound;
+    }
+    if buffer_size < item_size {
+        // The buffer is too small to possibly contain the item
+        if is_last {
+            return SearchResult::NotFound;
+        } else {
+            return SearchResult::NotFoundWithUnprocessed(buffer_size);
+        }
+    }
     assert!(item_size > 0, "Item size must be greater than zero");
-    assert!(buffer_size > 0, "Buffer size must be greater than zero");
 
     for (index, window) in buffer.windows(item_size).enumerate() {
         // info!(
