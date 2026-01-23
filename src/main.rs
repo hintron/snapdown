@@ -608,6 +608,8 @@ fn parse_memories_history_html(
     let mut header_column_count = 0usize;
     let mut row_column_count = 0usize;
     let mut current_record = csv::StringRecord::new();
+    let mut current_value = Vec::new();
+    let mut append_to_current_value = false;
     const EXPECTED_COLUMNS: usize = 4;
 
     loop {
@@ -698,12 +700,17 @@ fn parse_memories_history_html(
                                     SdParseState::SearchingForDownloadLink
                                 } else {
                                     // Generic td content - save it all
+                                    append_to_current_value = true;
+                                    current_value.clear();
                                     SdParseState::SearchingForTdClosing
                                 }
                             }
                             SdParseState::SearchingForTdClosing => {
-                                current_record
-                                    .push_field(&String::from_utf8_lossy(&buffer[..index]).trim());
+                                append_to_current_value = false;
+                                current_value.extend_from_slice(&buffer[..index]);
+                                current_record.push_field(
+                                    &String::from_utf8_lossy(current_value.as_slice()).trim(),
+                                );
                                 row_column_count += 1;
                                 if row_column_count == 3 {
                                     // Parse the last column, the download link
@@ -715,9 +722,13 @@ fn parse_memories_history_html(
                             }
                             // SdParseState::SearchingForTrClosing => SdParseState::SearchingForTr,
                             SdParseState::SearchingForDownloadLink => {
+                                append_to_current_value = true;
+                                current_value.clear();
                                 SdParseState::SearchingForDownloadLinkEnd
                             }
                             SdParseState::SearchingForDownloadLinkEnd => {
+                                append_to_current_value = false;
+                                current_value.extend_from_slice(&buffer[..index]);
                                 // This should be the last column in the row
                                 if row_column_count + 1 != EXPECTED_COLUMNS {
                                     log_error(
@@ -728,8 +739,24 @@ fn parse_memories_history_html(
                                         ),
                                     );
                                 }
-                                current_record
-                                    .push_field(&String::from_utf8_lossy(&buffer[..index]).trim());
+                                let download_link =
+                                    String::from_utf8_lossy(current_value.as_slice())
+                                        .trim()
+                                        .to_string();
+                                if !download_link.starts_with("https") {
+                                    log_error(
+                                        gui_console,
+                                        format!(
+                                            "Extracted download link did not start with https: {}",
+                                            download_link
+                                        ),
+                                    );
+                                    panic!(
+                                        "Invalid download link extracted at buffer index {index}: {}",
+                                        download_link
+                                    );
+                                }
+                                current_record.push_field(&download_link);
                                 csv_records.push(current_record.clone());
                                 // Reset for next data row
                                 current_record.clear();
@@ -740,12 +767,18 @@ fn parse_memories_history_html(
                             } // state => unimplemented!("Unhandled parse state: {:?}", state),
                         }
                     }
-                    SearchResult::NotFoundWithUnprocessed(n) => processed = buffer.len() - n,
+                    SearchResult::NotFoundWithUnprocessed(n) => {
+                        if append_to_current_value {
+                            current_value.extend_from_slice(&buffer[..buffer.len() - n])
+                        }
+                        processed = buffer.len() - n
+                    }
                     SearchResult::NotFound => processed = buffer.len(),
                 }
 
                 // Parsing progress has been made; advance internal cursor
                 html_reader.consume(processed);
+
                 file_byte_index += processed as u64;
             }
             None => {}
