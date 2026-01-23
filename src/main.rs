@@ -610,6 +610,8 @@ fn parse_memories_history_html(
     let mut current_record = csv::StringRecord::new();
     let mut current_value = Vec::new();
     let mut append_to_current_value = false;
+    let mut leftover_bytes: Vec<u8> = Vec::new();
+    let mut leftover_bytes_count = 0usize;
     const EXPECTED_COLUMNS: usize = 4;
 
     loop {
@@ -638,10 +640,29 @@ fn parse_memories_history_html(
         match tag {
             Some(tag) => {
                 // Since we are looking for a tag, read in data and search for it
-                let buffer = html_reader.fill_buf()?;
-                if buffer.is_empty() {
+                let buffer_raw = html_reader.fill_buf()?;
+                if buffer_raw.is_empty() {
                     break; // EOF
                 }
+
+                if leftover_bytes_count == 0 && buffer_raw.len() < tag.len() {
+                    leftover_bytes_count = buffer_raw.len();
+                    leftover_bytes.extend_from_slice(buffer_raw);
+                    // Load the next chunk
+                    html_reader.consume(leftover_bytes_count);
+                    continue;
+                }
+
+                let buffer = if leftover_bytes.len() > 0 {
+                    // We have some bytes left over from the previous chunk that
+                    // need to be parsed properly, but we only need to extend it
+                    // as much with the current chunk as is necessary to parse
+                    // the tag (hence the - 1)
+                    leftover_bytes.extend_from_slice(&buffer_raw[..tag.len() - 1]);
+                    &leftover_bytes[..]
+                } else {
+                    buffer_raw
+                };
 
                 let is_last = buffer.len() <= tag.len();
 
@@ -655,13 +676,13 @@ fn parse_memories_history_html(
                         is_last
                     ),
                 );
-                let processed;
+                let mut processed;
                 match look_for_item(&buffer, tag.as_bytes(), is_last) {
                     SearchResult::Found(index) => {
                         info!(
                             "Found '{}' at file byte index {} (buffer byte index {index})",
                             tag,
-                            file_byte_index + (index as u64)
+                            file_byte_index + (index as u64) - (leftover_bytes_count as u64)
                         );
                         processed = index + tag.len();
 
@@ -776,6 +797,13 @@ fn parse_memories_history_html(
                     SearchResult::NotFound => processed = buffer.len(),
                 }
 
+                if leftover_bytes_count > 0 {
+                    // The leftover bytes from the previous chunk do not count
+                    // as processed bytes in this chunk
+                    processed -= leftover_bytes_count;
+                    leftover_bytes_count = 0;
+                    leftover_bytes.clear();
+                }
                 // Parsing progress has been made; advance internal cursor
                 html_reader.consume(processed);
 
