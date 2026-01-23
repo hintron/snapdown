@@ -806,12 +806,31 @@ fn run_downloader(
     let skip_count = std::sync::atomic::AtomicUsize::new(0);
     // Each row is of the form (timestamp_utc, format, latitude, longitude, download_url)
     records.par_iter().for_each(|row| {
+        let row_len = row.len();
+        if row_len == 0 {
+            // Skip empty rows
+            log_error(gui_console, format!("Row was empty. Skipping download"));
+            error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return;
+        }
+
+        if row_len < 4 || row_len > 5 {
+            // Bad row data
+            log_error(
+                gui_console,
+                format!(
+                    "Row had unexpected number of columns ({}). Skipping download",
+                    row_len
+                ),
+            );
+            error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return;
+        }
+
+        assert!((row_len == 4) || (row_len == 5));
+
         let timestamp_str = row[0].replace(' ', "_").replace(':', "-");
         let format = &row[1];
-        let latitude = &row[2];
-        let longitude = &row[3];
-        let download_url = &row[4];
-
         let ext = match format {
             "Image" => "jpg",
             // "Image" => "png",
@@ -821,7 +840,27 @@ fn run_downloader(
             _ => "bin",
         };
 
-        let filename = format!("{}_{}_{}.{}", timestamp_str, latitude, longitude, ext);
+        let (filename, download_url) = if row_len == 5 {
+            // Assume timestamp, format, latitude, longitude, download_url
+            let latitude = &row[2];
+            let longitude = &row[3];
+            let download_url = &row[4];
+            (
+                format!("{}_{}_{}.{}", timestamp_str, latitude, longitude, ext),
+                download_url,
+            )
+        } else {
+            // Assume timestamp, format, latitude_longitude, download_url
+            let lat_long = row[2]
+                .replace("Latitude, Longitude: ", "")
+                .replace(", ", "_");
+            let download_url = &row[3];
+            (
+                format!("{}_{}.{}", timestamp_str, lat_long, ext),
+                download_url,
+            )
+        };
+
         let path = Path::new(output_dir).join(filename);
 
         if path.exists() {
